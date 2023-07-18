@@ -11,6 +11,7 @@ using SQLitePCL;
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Net;
+using System.Text;
 
 #region License
 /*
@@ -58,6 +59,12 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
     }
 
     private SQLiteAsyncConnection Database;
+    private Settings settings;
+    const string Check = "[green]✓[/]";
+    const string Cross = "[red]x[/]";
+    const string Arrow = "→";
+
+    string RWG(int a) => a > 0 ? "green" : a == 0 ? "blue" : "red";
 
     public async Task ProcessDump(string DumpName)
     {
@@ -143,12 +150,81 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
 
         Logger.Info("Creating views.");
         await Database.ExecuteAsync("CREATE VIEW Update_Data AS SELECT *, MajorLength / NumNations AS TPN_Major, MinorLength / NumNations AS TPN_Minor FROM (SELECT (SELECT COUNT(*) FROM Nation) AS NumNations, MAX(LastMajorUpdate) - MIN(LastMajorUpdate) AS MajorLength, MAX(LastMinorUpdate) - MIN(LastMinorUpdate) AS MinorLength FROM Region WHERE LastMinorUpdate > 0);");
-        await Database.ExecuteAsync("CREATE VIEW Raw_Estimates AS SELECT r_1.ID, r_1.Name, hasGovernor, hasPassword, isFrontier, Nation.ID * (SELECT TPN_Major FROM UpdateData) AS MajorEST, MajorACT, Nation.ID * (SELECT TPN_Minor FROM UpdateData) AS MinorEST, MinorACT, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Nation INNER JOIN (SELECT *, LastMajorUpdate - (SELECT MIN(LastMajorUpdate) FROM Region) AS MajorACT, LastMinorUpdate - (SELECT MIN(LastMinorUpdate) FROM Region WHERE LastMinorUpdate > 0) AS MinorACT FROM Region) AS r_1 ON Nation.Region = r_1.ID GROUP BY Region ORDER BY Nation.ID;");
+        await Database.ExecuteAsync("CREATE VIEW Raw_Estimates AS SELECT r_1.ID, r_1.Name, hasGovernor, hasPassword, isFrontier, Nation.ID * (SELECT TPN_Major FROM Update_Data) AS MajorEST, MajorACT, Nation.ID * (SELECT TPN_Minor FROM Update_Data) AS MinorEST, MinorACT, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Nation INNER JOIN (SELECT *, LastMajorUpdate - (SELECT MIN(LastMajorUpdate) FROM Region) AS MajorACT, LastMinorUpdate - (SELECT MIN(LastMinorUpdate) FROM Region WHERE LastMinorUpdate > 0) AS MinorACT FROM Region) AS r_1 ON Nation.Region = r_1.ID GROUP BY Region ORDER BY Nation.ID;");
         await Database.ExecuteAsync("CREATE VIEW Update_Times AS SELECT ID, Name, hasGovernor, hasPassword, isFrontier, strftime('%H:%M:%f', MajorEst, 'unixepoch') as MajorEST, strftime('%H:%M:%f', MajorAct, 'unixepoch') as MajorACT, ROUND(MajorAct - MajorEst, 3) AS MajorVar, strftime('%H:%M:%f', MinorEst, 'unixepoch') as MinorEST, strftime('%H:%M:%f', MinorAct, 'unixepoch') as MinorACT, ROUND(MinorAct - MinorEst, 3) AS MinorVar, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Raw_Estimates");
     }
 
+    public async Task<Region> SelectTriggerRegion(string Target, double TriggerWidth)
+    {
+        // Fetch Update Data
+        var Data = await Database.Table<UpdateData>().FirstOrDefaultAsync();
+        TriggerWidth = settings.Width ?? Data.TPN_Major;
+        double TPN = settings.Minor ? Data.TPN_Minor : Data.TPN_Major;
+
+        Target = settings.Target ?? AnsiConsole.Ask<string>("Please enter your [green]Target[/]: ");
+        Logger.Info($"Acquiring target data for {Target}");
+        var TargetRegion = await Database.FindWithQueryAsync<Region>("SELECT * FROM Region WHERE Name LIKE ?", Helpers.SanitizeName(Target));
+        var TargetNation = await Database.GetAsync<Nation>(N => N.Region == TargetRegion.ID);
+
+        int TriggerIndex = (int)(TargetNation.ID - (TriggerWidth / TPN));
+        var TriggerNation = await Database.GetAsync<Nation>(N => N.ID == TriggerIndex);
+        var TriggerRegion = await Database.GetAsync<Region>(R => R.ID == TriggerNation.Region);
+
+        AnsiConsole.MarkupLine($"Trigger for [green]{Target}[/] - [yellow]{TriggerRegion.Name}[/]");
+
+        return TriggerRegion;
+    }
+
+    public async Task ScanRegion(string Region)
+    {
+        Region = Helpers.SanitizeName(Region);
+        var Target = await Database.GetAsync<Region>(R => R.name == Region);
+        var TargetAPI = await NSAPI.Instance.GetRegion(Region);
+        StringBuilder Output = new();
+
+        Output.AppendLine($"Report on [yellow]{Target.name}[/]");
+        Output.AppendLine($"Raidable {(Target.DelegateHas(Authorities.Executive) && !Target.hasPassword ? Check : Cross)}");
+        Output.AppendLine($"Governor: {(Target.hasGovernor ? Check : Cross)}");
+
+        int NetChange = Target.NumNations - TargetAPI.NumNations;
+        Output.AppendLine($"Nations: {Target.NumNations} [{RWG(NetChange)}]{Arrow}[/] {TargetAPI.NumNations} (Net {NetChange})");
+        
+        // Officer reports
+        // Calculate the threshholds for invisible vs visible passwords
+        int Vis = TargetAPI.NumNations*20;
+        int Invis = TargetAPI.NumNations*40;
+        if ( TargetAPI.Delegate != null && TargetAPI.Delegate.Trim() != string.Empty)
+        {
+            var Del = await GetNation(TargetAPI.Delegate);
+            Output.AppendLine(await GenNationReport(Del, Vis, Invis, TargetAPI.DelegateAuth));
+        }
+        foreach(var Officer in TargetAPI.Officers.Where(O=>O.Nation?.ToLower() != "cte"))
+        {
+            var regionOfficer = await GetNation(Officer.Nation);
+            Output.AppendLine(await GenNationReport(regionOfficer, Vis, Invis, Officer.OfficerAuth));
+        }
+
+        AnsiConsole.MarkupLine(Output.ToString());
+    }
+
+    public async Task<string> GenNationReport(NationAPI Nation, int VisThresh, int InvisThresh, string Auth)
+    {
+        int influence = (int)Nation.CensusData[CensusScore.Influence].CensusScore;
+
+        bool BC = Auth.Contains("B") || Auth.Contains("X");
+        bool Vis = influence >= VisThresh;
+        bool Invis = influence >= InvisThresh;
+
+        return $"{Nation.InfluenceLevel.ToUpper()} {Nation.name} - BC: {(BC?Check:Cross)} - WA: {(Nation.IsWA?Check:Cross)} - Endos: {Nation.Endos} - Influence: {influence} - PW:{(Vis?Check:Cross)}{(Invis?Check:Cross)}";
+
+    }
+
+    public async Task<NationAPI> GetNation(string NationName) =>
+        (await NSAPI.Instance.GetAPI<NationAPI>($"https://www.nationstates.net/cgi-bin/api.cgi?nation={NationName};q=name+endorsements+influence+wa+census;scale=65+80")).Data;
+
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
     {
+        this.settings = settings;
         // Set up NSDotNet
         var API = NSAPI.Instance;
         API.UserAgent = $"V20XX/0.1 (By Vleerian, Atagait@hotmail.com)";
