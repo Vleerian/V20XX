@@ -82,18 +82,27 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
         Logger.Processing("Unzipping data dump.");
         var DataDump = NSDotnet.Helpers.BetterDeserialize<RegionDataDump>(NSAPI.UnzipDump(DumpName));
 
+        bool Current = $"regions.{DateTime.Now.ToString("MM.dd.yyyy")}.xml.gz" == DumpName;
         // Get relevant R/D data
         Logger.Request("Getting Governorless Regions");
-        var tmp = await NSAPI.Instance.GetAPI<WorldAPI>("https://www.nationstates.net/cgi-bin/api.cgi?q=regionsbytag;tags=governorless");
-        var Govless = tmp.Data;
+        (HttpResponseMessage Response, WorldAPI Data) tmp;
+        var Govless  = new string[0];
+        var Password  = new string[0];
+        var Frontiers = new string[0];
+        
+        if(Current)
+        {
+            tmp = await NSAPI.Instance.GetAPI<WorldAPI>("https://www.nationstates.net/cgi-bin/api.cgi?q=regionsbytag;tags=governorless");
+            Govless = tmp.Data.Regions.Split(",");
 
-        Logger.Request("Getting Passworded Regions");
-        tmp = await NSAPI.Instance.GetAPI<WorldAPI>("https://www.nationstates.net/cgi-bin/api.cgi?q=regionsbytag;tags=password");
-        var Password = tmp.Data;
+            Logger.Request("Getting Passworded Regions");
+            tmp = await NSAPI.Instance.GetAPI<WorldAPI>("https://www.nationstates.net/cgi-bin/api.cgi?q=regionsbytag;tags=password");
+            Password = tmp.Data.Regions.Split(",");
 
-        Logger.Request("Getting Frontier Regions");
-        tmp = await NSAPI.Instance.GetAPI<WorldAPI>("https://www.nationstates.net/cgi-bin/api.cgi?q=regionsbytag;tags=frontier");
-        var Frontier = tmp.Data;
+            Logger.Request("Getting Frontier Regions");
+            tmp = await NSAPI.Instance.GetAPI<WorldAPI>("https://www.nationstates.net/cgi-bin/api.cgi?q=regionsbytag;tags=frontier");
+            Frontiers = tmp.Data.Regions.Split(",");
+        }
 
         // Populate the database. This is transaction-alized to make it significantly faster.
         await Database.CreateTableAsync<Region>();
@@ -105,11 +114,15 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
                 var reg = DataDump.Regions[i];
                 try
                 {
-                var temp = new Region(reg) { 
-                    hasGovernor = !Govless.Regions.Contains(reg.Name),
-                    hasPassword = Password.Regions.Contains(reg.Name),
-                    isFrontier = Frontier.Regions.Contains(reg.Name)
-                };
+                Region temp;
+                if(Current)
+                    temp = new Region(reg) { 
+                        hasGovernor = !Govless.Contains(reg.Name),
+                        hasPassword = Password.Contains(reg.Name),
+                        isFrontier = Frontiers.Contains(reg.Name)
+                    };
+                else
+                    temp = new Region(reg);
                 Anon.Insert(temp);
 
                 foreach(var nation in reg.Nations)
@@ -160,22 +173,6 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
         // Data dump shit
         string DataDump = settings.DataDump ?? $"regions.{DateTime.Now.ToString("MM.dd.yyyy")}.xml.gz";
         await ProcessDump(DataDump);
-
-        // Fetch Update Data
-        var Data = await Database.Table<UpdateData>().FirstOrDefaultAsync();
-        double TriggerWidth = settings.Width ?? Data.TPN_Major;
-        double TPN = settings.Minor ? Data.TPN_Minor : Data.TPN_Major;
-
-        string Target = settings.Target ?? AnsiConsole.Ask<string>("Please enter your [green]Target[/]: ");
-        Logger.Info($"Acquiring target data for {Target}");
-        var TargetRegion = await Database.FindWithQueryAsync<Region>("SELECT * FROM Region WHERE Name LIKE ?", Helpers.SanitizeName(Target));
-        var TargetNation = await Database.GetAsync<Nation>(N => N.Region == TargetRegion.ID);
-
-        int TriggerIndex = (int)(TargetNation.ID - (TriggerWidth / TPN));
-        var TriggerNation = await Database.GetAsync<Nation>(N => N.ID == TriggerIndex);
-        var TriggerRegion = await Database.GetAsync<Region>(R => R.ID == TriggerNation.Region);
-
-        AnsiConsole.MarkupLine($"Trigger for [green]{Target}[/] - [yellow]{TriggerRegion.Name}[/]");
 
         return 0;
     }
