@@ -1,3 +1,6 @@
+using SQLite;
+
+[Table("Update_Data")]
 public class UpdateData
 {
     public int NumNations { get; init; }
