@@ -37,24 +37,26 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
 {
     public sealed class Settings : CommandSettings
     {
+
+        [CommandArgument(0, "[target]"), Description("The target to use. If not provided, V20XX will run in interactive mode.")]
+        public string? Target { get; init; }
+
         [CommandOption("-n|--nation"), Description("The nation using V20XX")]
         public string? Nation { get; init; }
 
-        [CommandOption("-p|--poll-speed"), Description("Poll speed, minimum is 750")]
-        public int? PollSpeed { get; init; }
+        [CommandOption("-p|--poll-speed"), Description("Poll speed, minimum is 650"), DefaultValue(750)]
+        public int PollSpeed { get; init; }
 
-        [CommandOption("-b|--beep"), Description("If you want V20XX to beep when a target updates")]
-        public bool? Beep { get; init; }
+        [CommandOption("-b|--beep"), Description("If you want V20XX to beep when a target updates"), DefaultValue(true)]
+        public bool Beep { get; init; }
 
-        [CommandOption("-w|--width"), Description("How wide you want your triggers to be in seconds")]
-        public int? Width { get; init; }
-        [CommandOption("-s|--switch"), Description("How long to leave between switches")]
-        public int? Switch { get; init; }
+        [CommandOption("-w|--width"), Description("How wide you want your triggers to be in seconds"), DefaultValue(5)]
+        public int Width { get; init; }
         [CommandOption("-d|--dump"), Description("Data dump file to use")]
         public string? DataDump { get; init; }
-        [CommandOption("-t|--target"), Description("The target to use")]
-        public string? Target { get; init; }
-        [CommandOption("-m|--minor"), Description("If to be in Major or Minor mode. Default: Major"), DefaultValue(true)]
+        [CommandOption("-x|--scan"), Description("Whether or not to perform region diagnostics."), DefaultValue(true)]
+        public bool Scan { get; init; }
+        [CommandOption("-m|--minor"), Description("Whether or not to calculate trigger widths for minor."), DefaultValue(false)]
         public bool Minor { get; init; }
     }
 
