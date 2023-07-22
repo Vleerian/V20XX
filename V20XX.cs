@@ -177,27 +177,41 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
     public async Task ScanRegion(string Region)
     {
         Region = Helpers.SanitizeName(Region);
-        var Target = await Database.GetAsync<Region>(R => R.name == Region);
+        Logger.Info("Selecting from DB...");
+        var Target = (await Database.QueryAsync<DB_Region>("SELECT * FROM Update_Times WHERE Name LIKE ?", Region)).FirstOrDefault();
+        
+        Logger.Request("Requesting region data");
         var TargetAPI = await NSAPI.Instance.GetRegion(Region);
         StringBuilder Output = new();
 
         Output.AppendLine($"Report on [yellow]{Target.name}[/]");
         Output.AppendLine($"Raidable {(Target.DelegateHas(Authorities.Executive) && !Target.hasPassword ? Check : Cross)}");
         Output.AppendLine($"Governor: {(Target.hasGovernor ? Check : Cross)}");
+        Output.AppendLine($"Frontier: {(Target.isFrontier ? Check : Cross)}");
 
         int NetChange = Target.NumNations - TargetAPI.NumNations;
         Output.AppendLine($"Nations: {Target.NumNations} [{RWG(NetChange)}]{Arrow}[/] {TargetAPI.NumNations} (Net {NetChange})");
+
+        Logger.Request("Requesting WA data");
+        var WorldAPI = await NSAPI.Instance.GetAPI<WorldAssemblyAPI>("https://www.nationstates.net/cgi-bin/api.cgi?wa=1&q=members");
+        var WAMembers = WorldAPI.Data.Members.Split(",");
+        var WACount = TargetAPI.Nations.Count(N => WAMembers.Contains(Helpers.SanitizeName(N)));
+        Output.AppendLine($"WA Members: {WACount}");
         
         // Officer reports
         // Calculate the threshholds for invisible vs visible passwords
         int Vis = TargetAPI.NumNations*20;
         int Invis = TargetAPI.NumNations*40;
+        Logger.Request("Requesting delegate data");
         if ( TargetAPI.Delegate != null && TargetAPI.Delegate.Trim() != string.Empty)
         {
             var Del = await GetNation(TargetAPI.Delegate);
             Output.AppendLine(await GenNationReport(Del, Vis, Invis, TargetAPI.DelegateAuth));
         }
-        foreach(var Officer in TargetAPI.Officers.Where(O=>O.Nation?.ToLower() != "cte"))
+
+        Logger.Request("Requesting RO data");
+        var LiveOfficers = TargetAPI.Officers.Where(O=>TargetAPI.Nations.Contains(Helpers.SanitizeName(O.Nation)));
+        foreach(var Officer in LiveOfficers)
         {
             var regionOfficer = await GetNation(Officer.Nation);
             Output.AppendLine(await GenNationReport(regionOfficer, Vis, Invis, Officer.OfficerAuth));
@@ -248,6 +262,13 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
         // Data dump shit
         string DataDump = settings.DataDump ?? $"regions.{DateTime.Now.ToString("MM.dd.yyyy")}.xml.gz";
         await ProcessDump(DataDump);
+
+        if(settings.Target != null)
+        {
+            if(settings.Scan == true)
+                await ScanRegion(settings.Target!);
+            var trigger = await SelectTriggerRegion(settings.Target, settings.Width);
+        }
 
         return 0;
     }
