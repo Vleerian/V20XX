@@ -152,19 +152,16 @@ internal sealed class V20XX : AsyncCommand<V20XX.Settings>
 
         Logger.Info("Creating views.");
         await Database.ExecuteAsync("CREATE VIEW Update_Data AS SELECT *, MajorLength / NumNations AS TPN_Major, MinorLength / NumNations AS TPN_Minor FROM (SELECT (SELECT COUNT(*) FROM Nation) AS NumNations, MAX(LastMajorUpdate) - MIN(LastMajorUpdate) AS MajorLength, MAX(LastMinorUpdate) - MIN(LastMinorUpdate) AS MinorLength FROM Region WHERE LastMinorUpdate > 0);");
-        await Database.ExecuteAsync("CREATE VIEW Raw_Estimates AS SELECT r_1.ID, r_1.Name, hasGovernor, hasPassword, isFrontier, Nation.ID * (SELECT TPN_Major FROM Update_Data) AS MajorEST, MajorACT, Nation.ID * (SELECT TPN_Minor FROM Update_Data) AS MinorEST, MinorACT, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Nation INNER JOIN (SELECT *, LastMajorUpdate - (SELECT MIN(LastMajorUpdate) FROM Region) AS MajorACT, LastMinorUpdate - (SELECT MIN(LastMinorUpdate) FROM Region WHERE LastMinorUpdate > 0) AS MinorACT FROM Region) AS r_1 ON Nation.Region = r_1.ID GROUP BY Region ORDER BY Nation.ID;");
-        await Database.ExecuteAsync("CREATE VIEW Update_Times AS SELECT ID, Name, hasGovernor, hasPassword, isFrontier, strftime('%H:%M:%f', MajorEst, 'unixepoch') as MajorEST, strftime('%H:%M:%f', MajorAct, 'unixepoch') as MajorACT, ROUND(MajorAct - MajorEst, 3) AS MajorVar, strftime('%H:%M:%f', MinorEst, 'unixepoch') as MinorEST, strftime('%H:%M:%f', MinorAct, 'unixepoch') as MinorACT, ROUND(MinorAct - MinorEst, 3) AS MinorVar, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Raw_Estimates");
+        await Database.ExecuteAsync("CREATE VIEW Raw_Estimates AS SELECT r_1.ID, r_1.Name, hasGovernor, hasPassword, isFrontier, Nation.ID * (SELECT TPN_Major FROM Update_Data) AS MajorEST, MajorACT, Nation.ID * (SELECT TPN_Minor FROM Update_Data) AS MinorEST, MinorACT, NumNations, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Nation INNER JOIN (SELECT *, LastMajorUpdate - (SELECT MIN(LastMajorUpdate) FROM Region) AS MajorACT, LastMinorUpdate - (SELECT MIN(LastMinorUpdate) FROM Region WHERE LastMinorUpdate > 0) AS MinorACT FROM Region) AS r_1 ON Nation.Region = r_1.ID GROUP BY Region ORDER BY Nation.ID;");
+        await Database.ExecuteAsync("CREATE VIEW Update_Times AS SELECT ID, Name, hasGovernor, hasPassword, isFrontier, strftime('%H:%M:%f', MajorEst, 'unixepoch') as MajorEST, strftime('%H:%M:%f', MajorAct, 'unixepoch') as MajorACT, ROUND(MajorAct - MajorEst, 3) AS MajorVar, strftime('%H:%M:%f', MinorEst, 'unixepoch') as MinorEST, strftime('%H:%M:%f', MinorAct, 'unixepoch') as MinorACT, ROUND(MinorAct - MinorEst, 3) AS MinorVar, NumNations, Delegate, DelegateAuth, DelegateVotes, Founder, FounderAuth, Embassies, Factbook FROM Raw_Estimates");
     }
 
     public async Task<Region> SelectTriggerRegion(string Target, double TriggerWidth)
     {
         // Fetch Update Data
         var Data = await Database.Table<UpdateData>().FirstOrDefaultAsync();
-        TriggerWidth = settings.Width ?? Data.TPN_Major;
         double TPN = settings.Minor ? Data.TPN_Minor : Data.TPN_Major;
 
-        Target = settings.Target ?? AnsiConsole.Ask<string>("Please enter your [green]Target[/]: ");
-        Logger.Info($"Acquiring target data for {Target}");
         var TargetRegion = await Database.FindWithQueryAsync<Region>("SELECT * FROM Region WHERE Name LIKE ?", Helpers.SanitizeName(Target));
         var TargetNation = await Database.GetAsync<Nation>(N => N.Region == TargetRegion.ID);
 
